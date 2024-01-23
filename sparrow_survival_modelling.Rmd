@@ -1,0 +1,1774 @@
+---
+title: "Bumpus"
+author: "Angela JACINTO"
+date: "2023-09-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("/Users/angelajacinto/Desktop/STAT2402/assignment2")
+df <- read.table(file="/Users/angelajacinto/Desktop/STAT2402/assignment2/bumpus.txt", header=TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library(GGally)
+library(MASS)
+library(broom)
+library(knitr)
+```
+
+```{r}
+bump <- df
+# Convert 'Sex' to numeric: 1 for female, 0 for male
+bump$Sex <- ifelse(bump$Sex == "f", 1, 0)
+# Convert 'Survival'variable to numeric type
+bump$Survival <- as.numeric(bump$Survival)
+summary(bump)
+
+bump_standard_deviations <- sapply(bump, function(x) round(sd(x, na.rm = TRUE), 4))
+print(bump_standard_deviations)
+
+str(bump)
+```
+
+Initialization
+```{r}
+null_model <- glm(Survival ~ 1, data = bump, family = binomial(link = logit))
+
+candidate_predictors <- c("Sex", "TotalLength", "AlarExtent", "Weight", "BeakHead", "Humerus", "Femur", "Tibiotarsus", "SkullWidth", "Sternum")
+
+# Initialize current model 
+currentmodel <- null_model
+```
+
+Forward Selection Loop for Main Effects
+```{r}
+while (length(candidate_predictors) > 0) {
+  # Store AIC values and models for each candidate predictor
+  aic_values <- numeric(length(candidate_predictors))
+  models <- list()
+  
+for (i in seq_along(candidate_predictors)) {
+model_string <- paste("Survival ~", paste(c(attr(currentmodel$terms, "term.labels"), candidate_predictors[i]), collapse = " + "))
+    
+    # Fit the model
+    candidate_model <- glm(as.formula(model_string), data = bump, family = binomial(link = logit))
+    
+    # Store the AIC value and the model
+    aic_values[i] <- AIC(candidate_model)
+    models[[i]] <- candidate_model
+  }
+  
+  # Find the predictor with the smallest AIC value
+  min_index <- which.min(aic_values)
+  
+  # Check if the AIC value is smaller than the AIC value of the current model
+  if (aic_values[min_index] < AIC(currentmodel)) {
+    # Update the current model to the model with the added predictor
+    currentmodel <- models[[min_index]]
+    
+    # Remove the added predictor from the list of candidate predictors
+    candidate_predictors <- setdiff(candidate_predictors, names(aic_values)[min_index])
+  } else {
+    break  # Exit the loop if no improvement in AIC is observed
+  }
+}
+
+summary(currentmodel)
+```
+
+```{r}
+# Defining predictors 
+predictors <- c("TotalLength", "Humerus", "Weight", "Sternum", "BeakHead")
+
+# Creating plot for predictor
+create_plot <- function(predictor) {
+  # Create a sequence for the predictor
+  predictor_seq <- seq(min(bump[[predictor]]), max(bump[[predictor]]), length.out = 100)
+
+  # Creating new data frames for prediction
+  newdata_male <- data.frame(
+    TotalLength = rep(mean(bump$TotalLength), 100),
+    Humerus = rep(mean(bump$Humerus), 100),
+    Weight = rep(mean(bump$Weight), 100),
+    Sternum = rep(mean(bump$Sternum), 100),
+    BeakHead = rep(mean(bump$BeakHead), 100),
+    Sex = rep(0, 100)  # Male
+  )
+
+  newdata_female <- newdata_male
+  newdata_female$Sex <- rep(1, 100)  # Female
+
+  # Updating the predictor of interest
+  newdata_male[[predictor]] <- predictor_seq
+  newdata_female[[predictor]] <- predictor_seq
+
+  # Generating predicted values for the new data frames
+  predicted_probs_male <- predict(currentmodel, newdata=newdata_male, type="response")
+  predicted_probs_female <- predict(currentmodel, newdata=newdata_female, type="response")
+
+  # Plotting
+  p <- ggplot(bump, aes_string(x=predictor, y="Survival", color = "factor(Sex)")) +
+    geom_point(pch=16) +
+    geom_line(data=newdata_male, aes_string(x=predictor, y=predicted_probs_male), color="black") +
+    geom_line(data=newdata_female, aes_string(x=predictor, y=predicted_probs_female), color="red") +
+    scale_color_manual(name = "", values=c("red", "black"), labels=c("Female", "Male")) +
+    labs(title=paste(predictor, "vs Survival"), x=predictor, y="Probability of Survival") +
+    theme_minimal()
+
+  return(p)
+}
+
+# Generating and storing plots 
+plots <- lapply(predictors, create_plot)
+
+plots
+```
+The plot visualizes how the probability of survival changes with different predictors between genders. For each predictor, the plots display how changes in that specific variable influence the likelihood of survival, while all other factors are held constant at their mean values.
+
+Confusion Matrix 
+```{r}
+library(caret)
+predicted_probs <- predict(currentmodel, type = "response")
+threshold <- 0.5 
+predicted_class <- ifelse(predicted_probs > threshold, "Survived", "Not_Survived")
+# Actual outcome of Survival
+actual_class <- ifelse(bump$Survival == 1, "Survived", "Not_Survived")
+
+# Factorize predicted and actual classes as they are character and numerical vectors
+predicted_class <- factor(predicted_class, levels = c("Not_Survived", "Survived"))
+actual_class <- factor(actual_class, levels = c("Not_Survived", "Survived"))
+
+conf_mtrx <- confusionMatrix(predicted_class, actual_class)
+conf_mtrx
+```
+Overall, these statistics indicate that the model has a fairly good predictive performance, with reasonable balance between identifying survival and non-survival cases in sparrows. The model's accuracy, sensitivity, and specificity are all moderately high, suggesting it's effectively distinguishing between the two classes.
+
+Model Assessment: Pearson Residuals 
+```{r}
+bump$Pears <- residuals(currentmodel, "pearson")
+bump$Fitted <- fitted(currentmodel)
+with(bump, cbind(Fitted, Pears))
+```
+
+Pearson Residual vs fitted values plot
+```{r}
+# Create the ggplot
+p_pearson <- ggplot(bump, aes(x=Fitted, y=Pears)) +
+  geom_point(pch=16) + 
+  geom_hline(yintercept=0, linetype="dashed") +
+  labs(title="Pearson Residuals vs Fitted Values", 
+       x="Fitted Values", 
+       y="Pearson Residuals") 
+
+p_pearson
+```
+The Pearson residuals plot is utilized to evaluate the fit of the generalized linear model. There is an uneven spread of residuals—an evidence of heteroscedasticity. This tells us that the model's precision varies across the fitted values. The plot also shows a clear pattern of the residuals with points forming a funnel shape as the fitted values increase, which suggests that the model is not capturing the relationship between the dependent and independent variables. Furthermore, there are a few points with high residuals on the positive side above 2, which suggest outliers  affecting the fit of the model.
+
+Manual Forward Selection for main effects
+```{r}
+# Sex
+model_with_sex <- glm(Survival ~ Sex, data = bump, family = binomial(link = logit))
+aic_with_sex <- AIC(model_with_sex)
+
+# Compare AIC Values
+aic_null_model <- AIC(null_model)
+print(paste("AIC with Sex:", aic_with_sex))
+print(paste("AIC of Null Model:", aic_null_model))
+
+# Decide 
+if (aic_with_sex < aic_null_model) {
+  m2 <- model_with_sex
+  candidate_predictors <- setdiff(candidate_predictors, "Sex")
+  print("Sex is included in the model.")
+} else {
+  print("Sex is not included in the model.")
+}
+```
+
+```{r}
+# Sex, Total Length 
+model_with_sex_totalLength <- glm(Survival ~ Sex + TotalLength, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength <- AIC(model_with_sex_totalLength)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength:", aic_with_sex_totalLength))
+print(paste("AIC of Current Model (with Sex):", aic_m2))
+
+
+# Decide 
+if (aic_with_sex_totalLength < aic_m2) {
+  m2 <- model_with_sex_totalLength
+  candidate_predictors <- setdiff(candidate_predictors, "TotalLength")
+  print("TotalLength is included in the model.")
+} else {
+  print("TotalLength is not included in the model.")
+}
+```
+
+```{r}
+# Sex, Total Length, AlarExtent 
+model_with_sex_totalLength_alarExtent <- glm(Survival ~ Sex + TotalLength + AlarExtent, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent <- AIC(model_with_sex_totalLength_alarExtent)
+
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent:", aic_with_sex_totalLength_alarExtent))
+print(paste("AIC of Current Model (with Sex + TotalLength):", aic_m2))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent < aic_m2) {
+  m2 <- model_with_sex_totalLength_alarExtent
+  candidate_predictors <- setdiff(candidate_predictors, "AlarExtent")
+  print("AlarExtent is included in the model.")
+} else {
+  print("AlarExtent is not included in the model.")
+}
+
+```
+
+```{r}
+# Sex, Total Length, AlarExtent, Weight 
+model_with_sex_totalLength_alarExtent_weight <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight <- AIC(model_with_sex_totalLength_alarExtent_weight)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight:", aic_with_sex_totalLength_alarExtent_weight))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent):", aic_m2))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight < aic_m2) {
+  m2 <- model_with_sex_totalLength_alarExtent_weight
+  candidate_predictors <- setdiff(candidate_predictors, "Weight")
+  print("Weight is included in the model.")
+} else {
+  print("Weight is not included in the model.")
+}
+
+```
+
+```{r}
+# Sex, Total Length, AlarExtent, Weight, BeakHead
+model_with_sex_totalLength_alarExtent_weight_beakHead <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead:", aic_with_sex_totalLength_alarExtent_weight_beakHead))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight):", aic_m2))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead < aic_m2) {
+  current_model <- model_with_sex_totalLength_alarExtent_weight_beakHead
+  candidate_predictors <- setdiff(candidate_predictors, "BeakHead")
+  print("BeakHead is included in the model.")
+} else {
+  print("BeakHead is not included in the model.")
+}
+
+
+```
+```{r}
+# Sex, Total Length, AlarExtent, Weight, BeakHead, Humerus 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead):", aic_m2))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus < aic_m2) {
+  m2 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus
+  candidate_predictors <- setdiff(candidate_predictors, "Humerus")
+  print("Humerus is included in the model.")
+} else {
+  print("Humerus is not included in the model.")
+}
+```
+```{r}
+# Sex, Total Length, AlarExtent, Weight, BeakHead, Humerus, Femur 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m2))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur < aic_m2) {
+  m2 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur
+  candidate_predictors <- setdiff(candidate_predictors, "Femur")
+  print("Femur is included in the model.")
+} else {
+  print("Femur is not included in the model.")
+}
+```
+```{r}
+# Sex, Total Length, AlarExtent, Weight, BeakHead, Humerus, Tibiotarsus 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m2))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus < aic_m2) {
+  m2 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus
+  candidate_predictors <- setdiff(candidate_predictors, "Tibiotarsus")
+  print("Tibiotarsus is included in the model.")
+} else {
+  print("Tibiotarsus is not included in the model.")
+}
+```
+```{r}
+# Sex, Total Length, AlarExtent, Weight, BeakHead, Humerus, SkullWidth
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m2))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth < aic_m2) {
+  m2 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth
+  candidate_predictors <- setdiff(candidate_predictors, "SkullWidth")
+  print("SkullWidth is included in the model.")
+} else {
+  print("SkullWidth is not included in the model.")
+}
+```
+```{r}
+# Sex, Total Length, AlarExtent, Weight, BeakHead, Humerus, Sternum 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum)
+
+# Compare AIC Values
+aic_m2 <- AIC(m2)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m2))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum < aic_m2) {
+  m2 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum
+  candidate_predictors <- setdiff(candidate_predictors, "Sternum")
+  print("Sternum is included in the model.")
+} else {
+  print("Sternum is not included in the model.")
+}
+```
+```{r}
+summary(m2)
+```
+The AIC of `currentmodel` (145.57) using the StepAIC procedure is better than the AIC of `m2` (147.3) using manual selection. 
+
+Manual forward Selection for Main effects and interaction terms 
+```{r}
+null_model <- glm(Survival ~ 1, data = bump, family = binomial(link = logit))
+# Defining Main Effects and Interaction Terms
+main_effects <- c("Sex", "TotalLength", "AlarExtent", "Weight", "BeakHead", "Humerus", "Femur", "Tibiotarsus", "SkullWidth", "Sternum")
+interaction_terms <- c()
+
+for (i in main_effects) {
+  for (j in setdiff(main_effects, i)) {
+    interaction_terms <- c(interaction_terms, paste(i, j, sep = ":"))
+  }
+}
+all_terms <- c(main_effects, interaction_terms)
+
+m3 <- null_model
+```
+
+```{r}
+# Sex
+model_with_sex <- glm(Survival ~ Sex, data = bump, family = binomial(link = logit))
+aic_with_sex <- AIC(model_with_sex)
+
+# Compare AIC Values
+aic_null_model <- AIC(null_model)
+print(paste("AIC with Sex:", aic_with_sex))
+print(paste("AIC of Null Model:", aic_null_model))
+
+# Decide 
+if (aic_with_sex < aic_null_model) {
+  m3 <- model_with_sex
+  all_terms <- setdiff(all_terms, "Sex")
+  print("Sex is included in the model.")
+} else {
+  print("Sex is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength
+model_with_sex_totalLength <- glm(Survival ~ Sex + TotalLength, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength <- AIC(model_with_sex_totalLength)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength:", aic_with_sex_totalLength))
+print(paste("AIC of Current Model (with Sex):", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength < aic_m3) {
+  m3 <- model_with_sex_totalLength
+  all_terms <- setdiff(all_terms, "TotalLength")
+  print("TotalLength is included in the model.")
+} else {
+  print("TotalLength is not included in the model.")
+}
+```
+
+```{r}
+# Sex, TotalLength, AlarExtent
+model_with_sex_totalLength_alarExtent <- glm(Survival ~ Sex + TotalLength + AlarExtent, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent <- AIC(model_with_sex_totalLength_alarExtent)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent:", aic_with_sex_totalLength_alarExtent))
+print(paste("AIC of Current Model (with Sex + TotalLength):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent
+  all_terms <- setdiff(all_terms, "AlarExtent")
+  print("AlarExtent is included in the model.")
+} else {
+  print("AlarExtent is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight
+model_with_sex_totalLength_alarExtent_weight <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight <- AIC(model_with_sex_totalLength_alarExtent_weight)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight:", aic_with_sex_totalLength_alarExtent_weight))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight
+  all_terms <- setdiff(all_terms, "Weight")
+  print("Weight is included in the model.")
+} else {
+  print("Weight is not included in the model.")
+}
+```
+
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead
+model_with_sex_totalLength_alarExtent_weight_beakHead <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead:", aic_with_sex_totalLength_alarExtent_weight_beakHead))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead
+  all_terms <- setdiff(all_terms, "BeakHead")
+  print("BeakHead is included in the model.")
+} else {
+  print("BeakHead is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus
+  all_terms <- setdiff(all_terms, "Humerus")
+  print("Humerus is included in the model.")
+} else {
+  print("Humerus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Femur
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_femur
+  all_terms <- setdiff(all_terms, "Femur")
+  print("Femur is included in the model.")
+} else {
+  print("Femur is not included in the model.")
+}
+
+```
+
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Tibiotarsus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_tibiotarsus
+  all_terms <- setdiff(all_terms, "Tibiotarsus")
+  print("Tibiotarsus is included in the model.")
+} else {
+  print("Tibiotarsus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, SkullWidth
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_skullWidth
+  all_terms <- setdiff(all_terms, "SkullWidth")
+  print("SkullWidth is included in the model.")
+} else {
+  print("SkullWidth is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum
+  all_terms <- setdiff(all_terms, "Sternum")
+  print("Sternum is included in the model.")
+} else {
+  print("Sternum is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength))
+print(paste("AIC of Current Model (with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum):", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength
+  all_terms <- setdiff(all_terms, "Sex:TotalLength")
+  print("Sex:TotalLength is included in the model.")
+} else {
+  print("Sex:TotalLength is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent
+  all_terms <- setdiff(all_terms, "Sex:AlarExtent")
+  print("Sex:AlarExtent is included in the model.")
+} else {
+  print("Sex:AlarExtent is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Sex:Weight
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_weight <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Weight, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_weight <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_weight)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Weight:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_weight))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_weight < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_weight
+  all_terms <- setdiff(all_terms, "Sex:Weight")
+  print("Sex:Weight is included in the model.")
+} else {
+  print("Sex:Weight is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Sex:BeakHead
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_beakHead <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:BeakHead, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_beakHead <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_beakHead)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:BeakHead:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_beakHead))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_beakHead < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_beakHead
+  all_terms <- setdiff(all_terms, "Sex:BeakHead")
+  print("Sex:BeakHead is included in the model.")
+} else {
+  print("Sex:BeakHead is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Sex:Humerus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_humerus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Humerus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_humerus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_humerus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Humerus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_humerus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_humerus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_humerus
+  all_terms <- setdiff(all_terms, "Sex:Humerus")
+  print("Sex:Humerus is included in the model.")
+} else {
+  print("Sex:Humerus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Sex:Femur
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_femur)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_femur))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_femur < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_femur
+  all_terms <- setdiff(all_terms, "Sex:Femur")
+  print("Sex:Femur is included in the model.")
+} else {
+  print("Sex:Femur is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Sex:Tibiotarsus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_tibiotarsus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_tibiotarsus))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_tibiotarsus
+  all_terms <- setdiff(all_terms, "Sex:Tibiotarsus")
+  print("Sex:Tibiotarsus is included in the model.")
+} else {
+  print("Sex:Tibiotarsus is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Sex:SkullWidth
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_skullWidth)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_skullWidth
+  all_terms <- setdiff(all_terms, "Sex:SkullWidth")
+  print("Sex:SkullWidth is included in the model.")
+} else {
+  print("Sex:SkullWidth is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Sex:Sternum
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_sternum)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_sex_sternum
+  all_terms <- setdiff(all_terms, "Sex:Sternum")
+  print("Sex:Sternum is included in the model.")
+} else {
+  print("Sex:Sternum is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:AlarExtent
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_alarExtent <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:AlarExtent, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_alarExtent <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_alarExtent)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:AlarExtent:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_alarExtent))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_alarExtent < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_alarExtent
+  all_terms <- setdiff(all_terms, "TotalLength:AlarExtent")
+  print("TotalLength:AlarExtent is included in the model.")
+} else {
+  print("TotalLength:AlarExtent is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:Weight
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_weight <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Weight, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_weight <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_weight)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Weight:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_weight))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_weight < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_weight
+  all_terms <- setdiff(all_terms, "TotalLength:Weight")
+  print("TotalLength:Weight is included in the model.")
+} else {
+  print("TotalLength:Weight is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:BeakHead
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_beakHead <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:BeakHead, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_beakHead <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_beakHead)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:BeakHead:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_beakHead))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_beakHead < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_beakHead
+  all_terms <- setdiff(all_terms, "TotalLength:BeakHead")
+  print("TotalLength:BeakHead is included in the model.")
+} else {
+  print("TotalLength:BeakHead is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:Humerus 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_humerus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Humerus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_humerus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_humerus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Humerus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_humerus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_humerus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_humerus
+  all_terms <- setdiff(all_terms, "TotalLength:Humerus")
+  print("TotalLength:Humerus is included in the model.")
+} else {
+  print("TotalLength:Humerus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:Femur
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_femur)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_femur))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_femur < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_femur
+  all_terms <- setdiff(all_terms, "TotalLength:Femur")
+  print("TotalLength:Femur is included in the model.")
+} else {
+  print("TotalLength:Femur is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:Tibiotarsus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_tibiotarsus)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_tibiotarsus))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_tibiotarsus
+  all_terms <- setdiff(all_terms, "TotalLength:Tibiotarsus")
+  print("TotalLength:Tibiotarsus is included in the model.")
+} else {
+  print("TotalLength:Tibiotarsus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:SkullWidth 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_skullWidth)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_skullWidth
+  all_terms <- setdiff(all_terms, "TotalLength:SkullWidth")
+  print("TotalLength:SkullWidth is included in the model.")
+} else {
+  print("TotalLength:SkullWidth is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, TotalLength:Sternum 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + TotalLength:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_totalLength_sternum
+  all_terms <- setdiff(all_terms, "TotalLength:Sternum")
+  print("TotalLength:Sternum is included in the model.")
+} else {
+  print("TotalLength:Sternum is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, AlarExtent:Weight
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_weight <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Weight, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_weight <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_weight)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Weight:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_weight))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_weight < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_weight
+  all_terms <- setdiff(all_terms, "AlarExtent:Weight")
+  print("AlarExtent:Weight is included in the model.")
+} else {
+  print("AlarExtent:Weight is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, AlarExtent:BeakHead
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_beakHead <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:BeakHead, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_beakHead <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_beakHead)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:BeakHead:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_beakHead))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_beakHead < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_beakHead
+  all_terms <- setdiff(all_terms, "AlarExtent:BeakHead")
+  print("AlarExtent:BeakHead is included in the model.")
+} else {
+  print("AlarExtent:BeakHead is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, AlarExtent:Humerus 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_humerus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Humerus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_humerus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_humerus)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Humerus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_humerus))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_humerus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_humerus
+  all_terms <- setdiff(all_terms, "AlarExtent:Humerus")
+  print("AlarExtent:Humerus is included in the model.")
+} else {
+  print("AlarExtent:Humerus is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, AlarExtent:Femur 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_femur)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_femur))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_femur < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_femur
+  all_terms <- setdiff(all_terms, "AlarExtent:Femur")
+  print("AlarExtent:Femur is included in the model.")
+} else {
+  print("AlarExtent:Femur is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, AlarExtent:Tibiotarsus 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_tibiotarsus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_tibiotarsus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_tibiotarsus
+  all_terms <- setdiff(all_terms, "AlarExtent:Tibiotarsus")
+  print("AlarExtent:Tibiotarsus is included in the model.")
+} else {
+  print("AlarExtent:Tibiotarsus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, AlarExtent:SkullWidth 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_skullWidth)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_skullWidth
+  all_terms <- setdiff(all_terms, "AlarExtent:SkullWidth")
+  print("AlarExtent:SkullWidth is included in the model.")
+} else {
+  print("AlarExtent:SkullWidth is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, AlarExtent:Sternum 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_sternum)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + AlarExtent:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_alarExtent_sternum
+  all_terms <- setdiff(all_terms, "AlarExtent:Sternum")
+  print("AlarExtent:Sternum is included in the model.")
+} else {
+  print("AlarExtent:Sternum is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Weight:BeakHead
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_beakHead <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:BeakHead, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_beakHead <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_beakHead)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:BeakHead:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_beakHead))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_beakHead < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_beakHead
+  all_terms <- setdiff(all_terms, "Weight:BeakHead")
+  print("Weight:BeakHead is included in the model.")
+} else {
+  print("Weight:BeakHead is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Weight:Humerus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_humerus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Humerus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_humerus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_humerus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Humerus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_humerus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_humerus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_humerus
+  all_terms <- setdiff(all_terms, "Weight:Humerus")
+  print("Weight:Humerus is included in the model.")
+} else {
+  print("Weight:Humerus is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Weight:Femur
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_femur)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_femur))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_femur < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_femur
+  all_terms <- setdiff(all_terms, "Weight:Femur")
+  print("Weight:Femur is included in the model.")
+} else {
+  print("Weight:Femur is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Weight:Tibiotarsus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_tibiotarsus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_tibiotarsus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_tibiotarsus
+  all_terms <- setdiff(all_terms, "Weight:Tibiotarsus")
+  print("Weight:Tibiotarsus is included in the model.")
+} else {
+  print("Weight:Tibiotarsus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Weight:SkullWidth
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_skullWidth)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_skullWidth
+  all_terms <- setdiff(all_terms, "Weight:SkullWidth")
+  print("Weight:SkullWidth is included in the model.")
+} else {
+  print("Weight:SkullWidth is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Weight:Sternum
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Weight:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum
+  all_terms <- setdiff(all_terms, "Weight:Sternum")
+  print("Weight:Sternum is included in the model.")
+} else {
+  print("Weight:Sternum is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, BeakHead:Humerus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_humerus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Humerus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_humerus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_humerus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Humerus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_humerus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_humerus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_humerus
+  all_terms <- setdiff(all_terms, "BeakHead:Humerus")
+  print("BeakHead:Humerus is included in the model.")
+} else {
+  print("BeakHead:Humerus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, BeakHead:Femur
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_femur)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_femur))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_femur < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_femur
+  all_terms <- setdiff(all_terms, "BeakHead:Femur")
+  print("BeakHead:Femur is included in the model.")
+} else {
+  print("BeakHead:Femur is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, BeakHead:Tibiotarsus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_tibiotarsus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_tibiotarsus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_tibiotarsus
+  all_terms <- setdiff(all_terms, "BeakHead:Tibiotarsus")
+  print("BeakHead:Tibiotarsus is included in the model.")
+} else {
+  print("BeakHead:Tibiotarsus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, BeakHead:SkullWidth
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_skullWidth)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_skullWidth
+  all_terms <- setdiff(all_terms, "BeakHead:SkullWidth")
+  print("BeakHead:SkullWidth is included in the model.")
+} else {
+  print("BeakHead:SkullWidth is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, BeakHead:Sternum
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + BeakHead:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_beakHead_sternum
+  all_terms <- setdiff(all_terms, "BeakHead:Sternum")
+  print("BeakHead:Sternum is included in the model.")
+} else {
+  print("BeakHead:Sternum is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Humerus:Femur 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Humerus:Femur:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur
+  all_terms <- setdiff(all_terms, "Humerus:Femur")
+  print("Humerus:Femur is included in the model.")
+} else {
+  print("Humerus:Femur is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Humerus:Tibiotarsus 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Humerus:Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_tibiotarsus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Humerus:Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_tibiotarsus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_tibiotarsus
+  all_terms <- setdiff(all_terms, "Humerus:Tibiotarsus")
+  print("Humerus:Tibiotarsus is included in the model.")
+} else {
+  print("Humerus:Tibiotarsus is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Humerus:SkullWidth 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Humerus:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_skullWidth)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Humerus:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_skullWidth
+  all_terms <- setdiff(all_terms, "Humerus:SkullWidth")
+  print("Humerus:SkullWidth is included in the model.")
+} else {
+  print("Humerus:SkullWidth is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Humerus:Sternum 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Humerus:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Humerus:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_sternum
+  all_terms <- setdiff(all_terms, "Humerus:Sternum")
+  print("Humerus:Sternum is included in the model.")
+} else {
+  print("Humerus:Sternum is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Femur:Tibiotarsus
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_tibiotarsus <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Femur:Tibiotarsus, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_tibiotarsus <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_tibiotarsus)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Femur:Tibiotarsus:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_tibiotarsus))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_tibiotarsus < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_tibiotarsus
+  all_terms <- setdiff(all_terms, "Femur:Tibiotarsus")
+  print("Femur:Tibiotarsus is included in the model.")
+} else {
+  print("Femur:Tibiotarsus is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Femur:SkullWidth
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Femur:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_skullWidth)
+
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Femur:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_skullWidth
+  all_terms <- setdiff(all_terms, "Femur:SkullWidth")
+  print("Femur:SkullWidth is included in the model.")
+} else {
+  print("Femur:SkullWidth is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Femur:Sternum
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Femur:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Femur:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_femur_sternum
+  all_terms <- setdiff(all_terms, "Femur:Sternum")
+  print("Femur:Sternum is included in the model.")
+} else {
+  print("Femur:Sternum is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Tibiotarsus: SkullWidth 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_skullWidth <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Tibiotarsus:SkullWidth, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_skullWidth <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_skullWidth)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Tibiotarsus:SkullWidth:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_skullWidth))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_skullWidth < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_skullWidth
+  all_terms <- setdiff(all_terms, "Tibiotarsus:SkullWidth")
+  print("Tibiotarsus:SkullWidth is included in the model.")
+} else {
+  print("Tibiotarsus:SkullWidth is not included in the model.")
+}
+
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, Tibiotarsus: Sternum 
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Tibiotarsus:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + Tibiotarsus:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_humerus_femur_sex_totalLength_sex_alarExtent_sex_femur_tibiotarsus_sternum
+  all_terms <- setdiff(all_terms, "Tibiotarsus:Sternum")
+  print("Tibiotarsus:Sternum is included in the model.")
+} else {
+  print("Tibiotarsus:Sternum is not included in the model.")
+}
+```
+```{r}
+# Sex, TotalLength, AlarExtent, Weight, BeakHead, Humerus, Sternum, Sex:TotalLength, Sex:AlarExtent, SkullWidth:Sternum
+model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_skullWidth_sternum <- glm(Survival ~ Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + SkullWidth:Sternum, data = bump, family = binomial(link = logit))
+aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_skullWidth_sternum <- AIC(model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_skullWidth_sternum)
+
+# Compare AIC Values
+aic_m3 <- AIC(m3)
+print(paste("AIC with Sex + TotalLength + AlarExtent + Weight + BeakHead + Humerus + Sternum + Sex:TotalLength + Sex:AlarExtent + Sex:Femur + Humerus:Femur + SkullWidth:Sternum:", aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_skullWidth_sternum))
+print(paste("AIC of Current Model:", aic_m3))
+
+# Decide 
+if (aic_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_skullWidth_sternum < aic_m3) {
+  m3 <- model_with_sex_totalLength_alarExtent_weight_beakHead_humerus_sternum_sex_totalLength_sex_alarExtent_weight_sternum_humerus_femur_skullWidth_sternum
+  all_terms <- setdiff(all_terms, "SkullWidth:Sternum")
+  print("SkullWidth:Sternum is included in the model.")
+} else {
+  print("SkullWidth:Sternum is not included in the model.")
+}
+```
+```{r}
+summary(m3)
+```
+
+Forward Selection for Main effects and interaction terms (STEPAIC)
+```{r}
+# Initialize and Define Variables
+null_model <- glm(Survival ~ 1, data = bump, family = binomial(link = logit))
+m4 <- null_model
+main_effects <- c("Sex", "TotalLength", "AlarExtent", "Weight", "BeakHead", "Humerus", "Femur", "Tibiotarsus", "SkullWidth", "Sternum")
+interaction_terms <- c()
+
+# Create interaction terms
+for (i in main_effects) {
+  for (j in setdiff(main_effects, i)) {
+    interaction_terms <- c(interaction_terms, paste(i, j, sep = ":"))
+  }
+}
+
+# Include both main effects and interaction terms in the initial set
+all_terms <- c(main_effects, interaction_terms)
+
+# Forward Selection 
+while (length(all_terms) > 0) {
+  aic_values <- numeric(length(all_terms))
+  models <- vector("list", length(all_terms))
+  
+  for (term_index in seq_along(all_terms)) {
+    term <- all_terms[term_index]
+    formula_string <- paste("Survival ~", paste(c(attr(current_model$terms, "term.labels"), term), collapse = " + "))
+    
+    # Attempt to fit the model and check for errors
+    candidate_model <- try(glm(as.formula(formula_string), data = bump, family = binomial(link = logit)), silent = TRUE)
+    
+    if (inherits(candidate_model, "try-error")) {
+      next  # Skip to the next iteration if there's an error
+    }
+    
+    # Store AIC and the model
+    aic_values[term_index] <- AIC(candidate_model)
+    models[[term_index]] <- candidate_model
+  }
+  
+  # Skip if all models resulted in an error
+  if (all(is.na(aic_values))) {
+    break
+  }
+  
+  # Find the model with the smallest AIC value
+  min_index <- which.min(aic_values)
+  min_aic <- aic_values[min_index]
+  
+  # Check if the smallest AIC value is less than the AIC of the current model
+  if (min_aic < AIC(current_model)) {
+    m4 <- models[[min_index]]
+    all_terms <- setdiff(all_terms, all_terms[min_index])
+  } else {
+    break
+  }
+}
+
+summary(m4)
+```
+
+Drop in deviance goodness-of-fit test for nested model
+```{r}
+anova(currentmodel, m3, test = "Chisq")
+```
+We perform a chi-square test to determine if the more complex model with additional predictors (m3) significantly improves the fit compared to the first model, `currentmodel`.
+
+Given the p-value of 0.1903, there isn't a statistically significant difference in the fit of the two models at the 0.05 significance level. This suggests that adding the interaction terms in the first model does not provide a statistically significant improvement in fit over m3. Therefore, we choose `currentmodel` for its simplicity, as the more complex model does not offer a significantly better explanation of the data.
+
+
+Odds of survival given `TotalLength`
+```{r}
+summary(currentmodel)
+
+min(bump$TotalLength)
+max(bump$TotalLength)
+
+# Calculate the odds for lower quartile of total length 
+odds_lower <- exp(17.4548 -0.4179 * (152))
+
+# Calculate the odds for upper quartile of total length 
+odds_upper <- exp(17.4548 -0.4179 * (167))
+
+# Calculate the odds ratio
+odds_ratio <- odds_upper / odds_lower
+
+# Calculate the percentage change
+percentage_change <- (odds_ratio - 1) * 100
+
+# Print the results
+cat("Odds of Survival for lower quartile:", odds_lower, "\n")
+cat("Odds of Survival for upper quartile:", odds_upper, "\n")
+cat("Odds Ratio (lower vs. upper):", odds_ratio, "\n")
+cat("Percentage Change:", percentage_change, "%\n")
+
+# Calculates the multiplicative change in odds for a one-unit increase in Total Length
+exp(-0.4179)
+```
+1. In `currentmodel`, the coefficient for TotalLength is -0.4179. This suggests that for every one-unit increase in TotalLength, the log-odds of survival decrease by -0.4179.
+
+2. We calculate the odds of survival for the lower and upper quartiles of `Total Length`. The result of the lower quartile is 9.858036e-21, indicating very low odds. While the result of the upper quartile is 1.868166e-23, even lower than the lower quartile.
+
+3. The odds ratio is 0.001895069, which indicates the odds of survival at the upper quartile are much lower compared to the lower quartile. The percentage change of -99.81049% indicates a drastic decrease in survival odds from the lower to the upper quartile of `TotalLength`. 
+
+4. The value 0.6584281 suggests that for every unit increase in `TotalLength`, the odds of survival decrease by approximately 34%. 
+
+Confidence Interval for `TotalLength`
+```{r}
+ci <- c(-0.4179 - 1.96 * 0.1014, -0.4179 + 1.96 * 0.1014)
+ci
+```
+We perform a confidence interval to provide an estimate of the range within which the regression coefficient is likely to fall. A narrower interval suggests a more precise estimate, while a wider interval indicates less precision.
+
+The output -0.616644 -0.219156 represents the lower and upper bounds of the 95% confidence interval for the coefficent of `TotalLength`.
+The results suggest that we can be 95% confident that the true value of the `TotalLength` coefficient lies between -0.975468 and -0.325532. Since the entire confidence interval is below zero, it suggests that the relationship between `Total Length` and the log odds of survival of a sparrow is significantly negative. An increase in `Total Length` is associated with a decrease in the log odds of survival.
+The fact that zero is not included in this interval indicates that the effect of Total Length is statistically significant at the 5% significance level.
+
+Odds of survival given `Humerus`
+```{r}
+summary(currentmodel)
+
+min(bump$Humerus)
+max(bump$Humerus)
+
+# Calculate the odds for lower quartile 
+odds_lower <- exp(17.4548 +51.4046 * (.659))
+
+# Calculate the odds for upper quartile 
+odds_upper <- exp(17.4548 +51.4046 * (.78))
+
+# Calculate the odds ratio
+odds_ratio <- odds_upper / odds_lower
+
+# Calculate the percentage change
+percentage_change <- (odds_ratio - 1) * 100
+
+# Print the results
+cat("Odds of Survival for lower quartile:", odds_lower, "\n")
+cat("Odds of Survival for upper quartile:", odds_upper, "\n")
+cat("Odds Ratio (lower vs. upper):", odds_ratio, "\n")
+cat("Percentage Change:", percentage_change, "%\n")
+
+# Calculates the multiplicative change in odds for a one-unit increase in predictor
+exp(51.4046)
+```
+1. The coefficient for Humerus suggests that for every one-unit increase in the humerus, the log-odds of survival increase by 51.4046. The large increase indicates a strong positive association between humerus size and the log-odds of survival. 
+
+2. We calculate the odds of survival for the lower and upper quartiles of `Humerus`. The result of the lower quartile is 1.961206e+22, indicating very high odds of survival. While the result of the upper quartile is 9.858616e+24, even larger than the lower quartile, suggesting even higher odds of survival.
+
+3. The odds ratio is 502.6814, which indicates the odds of survival at the upper quartile of Humerus size is approximately 503 times higher than the lower quartile. While the percentage change of 50168.14% represents a massive increase in survival odds from the lower to the upper quartile of `Humerus`. 
+
+4. The value 2.112196e+22 suggests that for every unit increase in `Humerus`, the odds of survival increase by a factor of 2.112196e+22. 
+
+Confidence Interval for `Humerus`
+```{r}
+ci <- c(51.4046 - 1.96 * 14.8298, 51.4046 + 1.96 * 14.8298)
+ci
+```
+The output 22.33819 80.47101 represents the lower and upper bounds of the 95% confidence interval for the coefficent of `Humerus`. The results indicate a wide range, which suggests the presence of uncertainty in the exact size; however, consistently suggests a positive relationship. 
+Since the entire confidence interval is above zero, it suggests that the relationship between `Humerus` and the log odds of survival of a sparrow is significantly positive. This means that an increase in the size of Humerus is associated with an increase in the log odds of survival.
+The fact that zero is not included in this interval indicates that the effect of Total Length is statistically significant at the 5% significance level.
+
+Odds of survival given `Sex`
+```{r}
+summary(currentmodel)
+
+# Calculate the odds for females 
+odds_lower <- exp(17.4548 -1.5958 * (1))
+
+# Calculate the odds for males
+odds_upper <- exp(17.4548 -1.5958 * (0))
+
+# Calculate the odds ratio
+odds_ratio <- odds_upper / odds_lower
+
+# Calculate the percentage change
+percentage_change <- (odds_ratio - 1) * 100
+
+# Print the results
+cat("Odds of Survival for lower quartile:", odds_lower, "\n")
+cat("Odds of Survival for upper quartile:", odds_upper, "\n")
+cat("Odds Ratio (lower vs. upper):", odds_ratio, "\n")
+cat("Percentage Change:", percentage_change, "%\n")
+
+# Calculates the multiplicative change in odds for a one-unit increase in predictor
+exp(-1.5958)
+```
+Note: The baseline group for the variable `Sex` in this analysis is for males, coded 0. Therefore, the coefficient in the regression analysis pertains to the change in log-odds survival of females. 
+
+1. The coefficient for `Sex` suggests that for every female sparrow, the log-odds of survival decreases by 1.5958. This indicates a negative association between the `Sex` variable and the log-odds of survival of a female sparrow.  
+
+2. The calculated odds of survival for females is 7717492. While the calculated odds for males are even higher at 38064780. This suggests that male sparrows has an even higher odds of survival.
+
+3. The odds ratio of 4.932273 indicates that male sparrows has about 4.93 times higher odds of survival than female sparrows. In addition, the percentage change of 393.2273% suggests a significant difference in survival odds between the two groups.
+
+4. The value 0.2027463 suggests that for every sparrow that is female, the odds of survival decrease by approximately 80%.
+
+```{r}
+ci <- c(-1.5958 - 1.96 * 0.5282, -1.5958 + 1.96 * 0.5282)
+ci
+```
+The output -2.631072 -0.560528 represents the lower and upper bounds for the coefficent of `Sex`. 
+Since the entire confidence interval is below zero, it reinforces the negative relationship between a female sparrow and the log odds of survival. This means that as `Sex` increases (from 0 to 1), the odds of survival decrease. The exclusion of zero from this interval indicates that the effect of `Sex` on survival is statistically significant at the 5% significance level.
+
+Odds of survival given `Weight`
+```{r}
+summary(currentmodel)
+min(bump$Weight)
+max(bump$Weight)
+
+# Calculate the odds for lower quartile 
+odds_lower <- exp(17.4548 -0.8259 * (22.6))
+
+# Calculate the odds for upper quartile
+odds_upper <- exp(17.4548 -0.8259 * (31))
+
+# Calculate the odds ratio
+odds_ratio <- odds_upper / odds_lower
+
+# Calculate the percentage change
+percentage_change <- (odds_ratio - 1) * 100
+
+# Print the results
+cat("Odds of Survival for lower quartile:", odds_lower, "\n")
+cat("Odds of Survival for upper quartile:", odds_upper, "\n")
+cat("Odds Ratio (lower vs. upper):", odds_ratio, "\n")
+cat("Percentage Change:", percentage_change, "%\n")
+
+# Calculates the multiplicative change in odds for a one-unit increase in predictor
+exp(-0.8259)
+```
+
+1. The coefficient for `Weight` suggests that for every unit increase in weight, the log-odds of survival decreases by 0.8259. This indicates a negative association between the variable `Weight` and the log-odds of survival.  
+
+2. We calculate the odds of survival for the lower and upper quartiles of `Weight`. The result of the lower quartile is 0.2980363, which suggest that at the lower quartile of weight, the odds of survival is relatively higher. While the result of the upper quartile at 0.0002892845, is significantly lower. This suggests that at the upper quartile, the odds of survival are much lower. 
+
+3. The odds ratio of 0.0009706351 indicates thatthe odds of survival at the upper quartile of `Weight` are much lower than at the lower quartile. In addition, the percentage change of -99.90294% suggests a significant decrease in survival odds from the lower to the upper quartile of `Weight`.
+
+4. The value 0.4378408 suggests that for every increase in a sparrows weight, the odds of survival decreases by approximately 57%.
+
+```{r}
+ci <- c(-0.8259 - 1.96 *0.2348, -0.8259 + 1.96 *0.2348)
+ci
+```
+The output -1.286108, -0.365692 represents the lower and upper bounds for the coefficent of `Weight`. 
+Since the entire confidence interval is below zero, it reinforces the negative relationship between `Weight` and the log-odds of survival. This means that an increase in `Weight` is associated with a decrease in the log odds of survival. The exclusion of zero from this interval indicates that the effect of weight on survival is statistically significant at the 5% significance level.
+
+Odds of survival given `Sternum`
+```{r}
+summary(currentmodel)
+min(bump$Sternum)
+max(bump$Sternum)
+
+# Calculate the odds for lower quartile 
+odds_lower <- exp(17.4548 + 16.8185 * (0.734))
+
+# Calculate the odds for upper quartile
+odds_upper <- exp(17.4548 + 16.8185 * (0.927))
+
+
+# Calculate the odds ratio
+odds_ratio <- odds_upper / odds_lower
+
+# Calculate the percentage change
+percentage_change <- (odds_ratio - 1) * 100
+
+# Print the results
+cat("Odds of Survival for lower quartile:", odds_lower, "\n")
+cat("Odds of Survival for upper quartile:", odds_upper, "\n")
+cat("Odds Ratio (lower vs. upper):", odds_ratio, "\n")
+cat("Percentage Change:", percentage_change, "%\n")
+
+# Calculates the multiplicative change in odds for a one-unit increase in predictor
+exp(16.8185)
+```
+
+1. The coefficient for `Sternum` suggests that for every unit increase in the size of a sparrow's sternum, the log-odds of survival increases by 16.8185. This indicates a positive association between the variable `Sternum` and the log-odds of survival.  
+
+2. We calculate the odds of survival for the lower and upper quartiles of `Sternum`. The result of the lower quartile is 8.745663e+12. The very large number suggests extremely high odds of survival at the lower quartile of `Sternum`. While the result of the upper quartile at 2.246466e+14, is even larger than the lower quartile, indicating even higher odds of survival.
+
+3. The odds ratio of 25.68663 indicates that the odds of survival at the upper quartile of `Sternum` are approximately 25.69 times higher than at the lower quartile. In addition, the percentage change of 2468.663% suggests a significant increase in survival odds from the lower to the upper quartile of `Sternum`.
+
+4. The very large value of `exp(16.8185)`, indicates how much the odds of survival are expected to increase with each additional unit increase in Sternum size. The resulting value of 20145671 suggests that even a small increase in the size of a sparrows sternum significantly increases the odds of survival.
+
+```{r}
+ci <- c(16.8185 - 1.96 *8.1808, 16.8185 + 1.96 *8.1808)
+ci
+```
+The output 0.784132 32.852868 represents the lower and upper bounds for the coefficent of `Sternum`. 
+Since the entire confidence interval is above zero, it reinforces the strong positive relationship between Sternum size and the log-odds of survival. This means that an increase in `Sternum` is associated with an increase in the log odds of survival. The exclusion of zero from this interval indicates that the effect of sternum on survival is statistically significant at the 5% significance level.
+
+
